@@ -1,0 +1,123 @@
+name: CI
+
+on: push
+
+permissions:
+  contents: read
+
+env:
+  MPLBACKEND: Agg
+  NB_KERNEL: python
+  PIP_INDEX_URL: http://localhost:8629/2023-12-06
+  SEABORN_DATA: ${{ github.workspace }}/seaborn-data
+  UV_INDEX_URL: http://localhost:8629/2023-12-06
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    services:
+      pypi_wayback:
+        image: ghcr.io/waleko/pypi-wayback
+        ports:
+        - 8629:8080
+    steps:
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11   # v4.1.1
+
+    - name: Setup Python 3.11
+      uses: actions/setup-python@65d7f2d534ac1bc67fcd62888c5f4f3d2cb2b236   # v4.7.1
+      with:
+        python-version: '3.11'
+
+    - name: Install seaborn
+      run: |
+        pip install --upgrade pip
+        pip install .[stats,docs]
+
+    - name: Install pandoc
+      run: |
+        sudo apt-get install pandoc
+
+    - name: Cache datasets
+      run: |
+        git clone https://github.com/mwaskom/seaborn-data.git
+        ls $SEABORN_DATA
+
+    - name: Build docs
+      env:
+        SPHINXOPTS: -j `nproc`
+      run: |
+        cd doc
+        make -j `nproc` notebooks
+        make html
+
+
+  run-tests:
+    runs-on: ubuntu-latest
+    services:
+      pypi_wayback:
+        image: ghcr.io/waleko/pypi-wayback
+        ports:
+        - 8629:8080
+
+    strategy:
+      matrix:
+        python: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        install: [full]
+        deps: [latest]
+
+        include:
+        - python: '3.8'
+          install: full
+          deps: pinned
+        - python: '3.11'
+          install: light
+          deps: latest
+
+    steps:
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11   # v4.1.1
+
+    - name: Setup Python ${{ matrix.python }}
+      uses: actions/setup-python@65d7f2d534ac1bc67fcd62888c5f4f3d2cb2b236   # v4.7.1
+      with:
+        python-version: ${{ matrix.python }}
+        allow-prereleases: true
+
+    - name: Install seaborn
+      run: |
+        pip install --upgrade pip wheel
+        if [[ ${{matrix.install}} == 'full' ]]; then EXTRAS=',stats'; fi
+        if [[ ${{matrix.deps }} == 'pinned' ]]; then DEPS='-r ci/deps_pinned.txt'; fi
+        pip install .[dev$EXTRAS] $DEPS
+
+    - name: Run tests
+      run: make test
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@eaaf4bedf32dbdc6b720b63067d99c4d77d6047d   # v3.1.4
+      if: ${{ success() }}
+
+  lint:
+    runs-on: ubuntu-latest
+    services:
+      pypi_wayback:
+        image: ghcr.io/waleko/pypi-wayback
+        ports:
+        - 8629:8080
+    strategy:
+      fail-fast: false
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11   # v4.1.1
+
+    - name: Setup Python
+      uses: actions/setup-python@65d7f2d534ac1bc67fcd62888c5f4f3d2cb2b236   # v4.7.1
+
+    - name: Install tools
+      run: pip install mypy flake8
+
+    - name: Flake8
+      run: make lint
+
+    - name: Type checking
+      run: make typecheck
